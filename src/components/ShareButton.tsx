@@ -17,7 +17,7 @@ ${emoji} 私のタイプは【${result.type} - ${result.typeName}】でした！
 
 ${result.traits.slice(0, 3).map(t => `・${t}`).join("\n")}
 
-#MBTI診断 #性格診断 #PhotoMBTI`;
+#PhotoMBTI`;
 
     const pageUrl = typeof window !== "undefined" ? window.location.href : "";
     const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(pageUrl)}`;
