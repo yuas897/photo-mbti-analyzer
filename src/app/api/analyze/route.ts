@@ -28,13 +28,52 @@ MBTIタイプ一覧：
 - ISTJ（管理者）, ISFJ（擁護者）, ESTJ（幹部）, ESFJ（領事官）
 - ISTP（巨匠）, ISFP（冒険家）, ESTP（起業家）, ESFP（エンターテイナー）`;
 
+// リトライ付きでAPIを呼び出す関数
+async function callGeminiWithRetry(
+  model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
+  prompt: string,
+  imageData: { mimeType: string; data: string },
+  maxRetries: number = 3
+) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent([
+        prompt,
+        {
+          inlineData: {
+            mimeType: imageData.mimeType,
+            data: imageData.data,
+          },
+        },
+      ]);
+      return result;
+    } catch (error) {
+      const isOverloaded =
+        error instanceof Error &&
+        (error.message.includes("503") || error.message.includes("overloaded"));
+
+      if (isOverloaded && attempt < maxRetries) {
+        // 1秒、2秒、3秒と待機時間を増やす
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+        console.log(`Retry attempt ${attempt + 1}/${maxRetries}...`);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "APIキーが設定されていません。環境変数 GEMINI_API_KEY を設定してください。" },
+        {
+          error:
+            "APIキーが設定されていません。環境変数 GEMINI_API_KEY を設定してください。",
+        },
         { status: 500 }
       );
     }
@@ -49,17 +88,12 @@ export async function POST(request: NextRequest) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    const result = await model.generateContent([
-      PROMPT,
-      {
-        inlineData: {
-          mimeType: mimeType || "image/jpeg",
-          data: image,
-        },
-      },
-    ]);
+    const result = await callGeminiWithRetry(model, PROMPT, {
+      mimeType: mimeType || "image/jpeg",
+      data: image,
+    });
 
     const response = await result.response;
     const text = response.text();
@@ -80,9 +114,13 @@ export async function POST(request: NextRequest) {
 
     try {
       const analysisResult = JSON.parse(jsonStr);
-      
+
       // バリデーション
-      if (!analysisResult.type || !analysisResult.typeName || !analysisResult.description) {
+      if (
+        !analysisResult.type ||
+        !analysisResult.typeName ||
+        !analysisResult.description
+      ) {
         throw new Error("必須フィールドが不足しています");
       }
 
@@ -90,30 +128,45 @@ export async function POST(request: NextRequest) {
     } catch (parseError) {
       console.error("JSON parse error:", parseError, "Raw text:", text);
       return NextResponse.json(
-        { error: "AIからの応答を解析できませんでした。別の写真でお試しください。" },
+        {
+          error:
+            "AIからの応答を解析できませんでした。別の写真でお試しください。",
+        },
         { status: 500 }
       );
     }
   } catch (error) {
     console.error("Analysis error:", error);
-    
+
     if (error instanceof Error) {
       if (error.message.includes("SAFETY")) {
         return NextResponse.json(
-          { error: "この画像は分析できませんでした。別の写真をお試しください。" },
+          {
+            error:
+              "この画像は分析できませんでした。別の写真をお試しください。",
+          },
           { status: 400 }
         );
       }
-      if (error.message.includes("Could not find person") || error.message.includes("人物")) {
+      if (
+        error.message.includes("503") ||
+        error.message.includes("overloaded")
+      ) {
         return NextResponse.json(
-          { error: "写真から人物を検出できませんでした。人物が写っている写真をアップロードしてください。" },
-          { status: 400 }
+          {
+            error:
+              "サーバーが混雑しています。少し時間をおいて再度お試しください。",
+          },
+          { status: 503 }
         );
       }
     }
 
     return NextResponse.json(
-      { error: "分析中にエラーが発生しました。しばらく待ってから再度お試しください。" },
+      {
+        error:
+          "分析中にエラーが発生しました。しばらく待ってから再度お試しください。",
+      },
       { status: 500 }
     );
   }
